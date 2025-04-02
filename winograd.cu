@@ -1,3 +1,6 @@
+#include <cublas_v2.h>
+#include <immintrin.h>
+
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -17,7 +20,6 @@ void image_transform(float *__restrict__ packed_image,
   V_tensor_t V_tensor = (V_tensor_t)V;
 
   float z0, z1, z2, z3, z4, z5, z6;
-
   for (int64_t idx = 0; idx < collapsed_dim_size; idx++) {
     for (int64_t w = 0; w < ti.tile_in_w; ++w) {
       z6 = packed_image_tensor[0][w][idx];
@@ -348,22 +350,125 @@ void output_unpacking_store(float *__restrict__ Y,
   }
 }
 
-void sgemm(const int64_t M, const int64_t N, const int64_t K, float *A, float *B, float *C) {
-  typedef float(*A_tensor_t)[K];
-  typedef float(*B_tensor_t)[K];
-  typedef float(*C_tensor_t)[M];
-  A_tensor_t A_tensor = (A_tensor_t)A;
-  B_tensor_t B_tensor = (B_tensor_t)B;
-  C_tensor_t C_tensor = (C_tensor_t)C;
+#define IDX2C(i, j, ld) (((j) * (ld)) + (i))
 
-  for (int64_t m = 0; m < M; ++m) {
-    for (int64_t n = 0; n < N; ++n) {
-      C_tensor[n][m] = 0;
-      for (int64_t k = 0; k < K; ++k) {
-        C_tensor[n][m] += A_tensor[m][k] * B_tensor[n][k];
-      }
-    }
+void sgemm(const int64_t M, const int64_t N, const int64_t K, float *A, float *B, float *C) {
+
+  // typedef float(*A_tensor_t)[K];
+  // typedef float(*B_tensor_t)[K];
+  // typedef float(*C_tensor_t)[M];
+  // A_tensor_t A_tensor = (A_tensor_t)A;
+  // B_tensor_t B_tensor = (B_tensor_t)B;
+  // C_tensor_t C_tensor = (C_tensor_t)C;
+
+  // for (int64_t m = 0; m < M; ++m) {
+  //   for (int64_t n = 0; n < N; ++n) {
+  //     C_tensor[n][m] = 0;
+  //     for (int64_t k = 0; k < K; ++k) {
+  //       C_tensor[n][m] += A_tensor[m][k] * B_tensor[n][k];
+  //     }
+  //   }
+  // }
+  // 创建cuBLAS句柄
+  cublasHandle_t handle;
+  cublasStatus_t status = cublasCreate(&handle);
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    fprintf(stderr, "cuBLAS初始化失败\n");
+    return;
   }
+
+  // 分配GPU内存
+  float *d_A, *d_B, *d_C;
+  cudaError_t cudaStatus;
+
+  cudaStatus = cudaMalloc((void **)&d_A, sizeof(float) * M * K);
+  if (cudaStatus != cudaSuccess) {
+    fprintf(stderr, "cudaMalloc失败: %s\n", cudaGetErrorString(cudaStatus));
+    cublasDestroy(handle);
+    return;
+  }
+
+  cudaStatus = cudaMalloc((void **)&d_B, sizeof(float) * N * K);
+  if (cudaStatus != cudaSuccess) {
+    fprintf(stderr, "cudaMalloc失败: %s\n", cudaGetErrorString(cudaStatus));
+    cudaFree(d_A);
+    cublasDestroy(handle);
+    return;
+  }
+
+  cudaStatus = cudaMalloc((void **)&d_C, sizeof(float) * N * M);
+  if (cudaStatus != cudaSuccess) {
+    fprintf(stderr, "cudaMalloc失败: %s\n", cudaGetErrorString(cudaStatus));
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cublasDestroy(handle);
+    return;
+  }
+
+  // 复制数据到GPU
+  cudaStatus = cudaMemcpy(d_A, A, sizeof(float) * M * K, cudaMemcpyHostToDevice);
+  if (cudaStatus != cudaSuccess) {
+    fprintf(stderr, "cudaMemcpy失败: %s\n", cudaGetErrorString(cudaStatus));
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+    cublasDestroy(handle);
+    return;
+  }
+
+  cudaStatus = cudaMemcpy(d_B, B, sizeof(float) * N * K, cudaMemcpyHostToDevice);
+  if (cudaStatus != cudaSuccess) {
+    fprintf(stderr, "cudaMemcpy失败: %s\n", cudaGetErrorString(cudaStatus));
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+    cublasDestroy(handle);
+    return;
+  }
+
+  // 执行矩阵乘法
+  const float alpha = 1.0f;
+  const float beta = 0.0f;
+
+  //C n*m = A m*k * B n*k
+  //C = B * A^T
+  //column-major
+  //C m*n = A m*k * B k*n 
+  status = cublasSgemm(handle,
+                       CUBLAS_OP_T,
+                       CUBLAS_OP_N,
+                       M,
+                       N,
+                       K,
+                       &alpha,
+                       d_A,
+                       K,  
+                       d_B,
+                       K,  
+                       &beta,
+                       d_C,
+                       M);
+
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    fprintf(stderr, "cublasSgemm失败: %d\n", status);
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+    cublasDestroy(handle);
+    return;
+  }
+
+  // 将结果复制回主机
+  cudaStatus = cudaMemcpy(C, d_C, sizeof(float) * N * M, cudaMemcpyDeviceToHost);
+  if (cudaStatus != cudaSuccess) {
+    fprintf(stderr, "cudaMemcpy失败: %s\n", cudaGetErrorString(cudaStatus));
+  }
+
+  // 清理资源
+  cudaFree(d_A);
+  cudaFree(d_B);
+  cudaFree(d_C);
+  cublasDestroy(handle);
 }
 
 void winograd_convolution(
@@ -396,6 +501,7 @@ void winograd_convolution(
   image_packing(image, packed_image, is, ti);
   image_transform(packed_image, V, vs, ti, vs.ic * vs.num_tiles);
 
+
   for (int64_t h = 0; h < ti.tile_in_h; ++h) {
     for (int64_t w = 0; w < ti.tile_in_w; ++w) {
       typedef float(*U_tensor_t)[ti.tile_in_w][us.oc][us.ic];
@@ -412,6 +518,7 @@ void winograd_convolution(
             (float *)(M_tensor[h][w]));
     }
   }
+
 
   output_transform(M, Y, ti, us.oc * vs.num_tiles);
   output_unpacking_store(Y, out, os, ti);

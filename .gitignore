@@ -1,1 +1,4 @@
 winograd
+.vscode
+perf.data
+perf.data.*
