@@ -1,5 +1,7 @@
 #include <cublas_v2.h>
 #include <immintrin.h>
+#include <chrono>
+#include <iostream>
 
 #include <cassert>
 #include <cstdint>
@@ -314,16 +316,18 @@ void image_packing(float *__restrict__ image,
   #pragma omp parallel for collapse(4)
   for (int64_t tile = 0; tile < ti.num_tiles; tile++) {
     for (int64_t ic = 0; ic < is.ic; ic++) {
-      for (int64_t h = 0; h < ti.tile_in_h; ++h) {
-        for (int64_t w = 0; w < ti.tile_in_w; ++w) {
           tile_index_t tidx = get_tile_index(tile, ti);
           int64_t batch = tidx.b, ww = tidx.tw, hh = tidx.th;
-          if (hh * 4 + h < is.h && ww * 4 + w < is.w)
+      for (int64_t h = 0; h < ti.tile_in_h; ++h) {
+        for (int64_t w = 0; w < ti.tile_in_w; ++w) {
+          if (h < is.h - hh*4 &&  w < is.w-ww * 4)
             packed_image_tensor[h][w][tile][ic] = image_tensor[batch][ic][(hh * 4 + h)][(ww * 4 + w)];
           else
             packed_image_tensor[h][w][tile][ic] = 0;
         }
       }
+
+
     }
   }
 }
@@ -409,7 +413,19 @@ void winograd_convolution(
     const int output_channel_num,
     const int batch_num,
     float *__restrict__ out) {
-  /* new vars of shape */
+  
+  // 创建CUDA事件用于GPU操作计时
+  cudaEvent_t start, stop;
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+  float milliseconds = 0;
+  
+  // CPU计时变量
+  auto total_start = std::chrono::high_resolution_clock::now();
+  auto step_start = total_start;
+  auto step_end = total_start;
+  
+  /* 初始化形状和内存分配 */
   const image_shape_t is = {.bs = batch_num, .ic = input_channel_num, .h = image_height, .w = image_width};
   const filter_shape_t fs = {.oc = output_channel_num, .ic = input_channel_num, .h = FLT_H, .w = FLT_W};
   const out_shape_t os = get_output_shape(is, fs);
@@ -424,45 +440,91 @@ void winograd_convolution(
   float *M = (float *)malloc(sizeof(float) * ti.tile_in_h * ti.tile_in_w * us.oc * vs.num_tiles);
   float *Y = (float *)malloc(sizeof(float) * ti.tile_out_h * ti.tile_in_w * os.oc * ti.num_tiles);
 
+  step_end = std::chrono::high_resolution_clock::now();
+  std::cout << "Init and memory allocation: " 
+            << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
+            << " ms" << std::endl;
+  
+  // 计时filter_packing
+  step_start = std::chrono::high_resolution_clock::now();
   filter_packing(filter, packed_filter, fs);
+  step_end = std::chrono::high_resolution_clock::now();
+  std::cout << "filter_packing: " 
+            << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
+            << " ms" << std::endl;
+  
+  // 计时filter_transform
+  step_start = std::chrono::high_resolution_clock::now();
   filter_transform(packed_filter, U, fs, us, us.oc * us.ic);
+  step_end = std::chrono::high_resolution_clock::now();
+  std::cout << "filter_transform: " 
+            << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
+            << " ms" << std::endl;
 
+  // 计时image_packing
+  step_start = std::chrono::high_resolution_clock::now();
   image_packing(image, packed_image, is, ti);
+  step_end = std::chrono::high_resolution_clock::now();
+  std::cout << "image_packing: " 
+            << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
+            << " ms" << std::endl;
+  
+  // 计时image_transform
+  step_start = std::chrono::high_resolution_clock::now();
   image_transform(packed_image, V, vs, ti, vs.ic * vs.num_tiles);
+  step_end = std::chrono::high_resolution_clock::now();
+  std::cout << "image_transform: " 
+            << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
+            << " ms" << std::endl;
 
+  // 计时sgemm(含GPU操作)
+  step_start = std::chrono::high_resolution_clock::now();
+  cudaEventRecord(start);
+  sgemm(vs.num_tiles, us.oc, us.ic, (float *)(V), (float *)(U), (float *)(M), ti.tile_in_h*ti.tile_in_w);
+  cudaEventRecord(stop);
+  step_end = std::chrono::high_resolution_clock::now();
+  
+  cudaEventSynchronize(stop);
+  cudaEventElapsedTime(&milliseconds, start, stop);
+  std::cout << "sgemm total: " 
+            << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
+            << " ms (GPU kernel: " << milliseconds << " ms)" << std::endl;
 
-  // for (int64_t h = 0; h < ti.tile_in_h; ++h) {
-  //   for (int64_t w = 0; w < ti.tile_in_w; ++w) {
-  //     typedef float(*U_tensor_t)[ti.tile_in_w][us.oc][us.ic];
-  //     typedef float(*V_tensor_t)[ti.tile_in_w][vs.num_tiles][vs.ic];
-  //     typedef float(*M_tensor_t)[ti.tile_in_w][us.oc][vs.num_tiles];
-  //     U_tensor_t U_tensor = (U_tensor_t)U;
-  //     V_tensor_t V_tensor = (V_tensor_t)V;
-  //     M_tensor_t M_tensor = (M_tensor_t)M;
-  //     sgemm(vs.num_tiles,
-  //           us.oc,
-  //           us.ic,
-  //           (float *)(V_tensor[h][w]),
-  //           (float *)(U_tensor[h][w]),
-  //           (float *)(M_tensor[h][w]));
-  //   }
-  // }
-  sgemm(vs.num_tiles,
-    us.oc,
-    us.ic,
-    (float *)(V),
-    (float *)(U),
-    (float *)(M),
-    ti.tile_in_h*ti.tile_in_w);
-
-
+  // 计时output_transform
+  step_start = std::chrono::high_resolution_clock::now();
   output_transform(M, Y, ti, us.oc * vs.num_tiles);
+  step_end = std::chrono::high_resolution_clock::now();
+  std::cout << "output_transform: " 
+            << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
+            << " ms" << std::endl;
+  
+  // 计时output_unpacking_store
+  step_start = std::chrono::high_resolution_clock::now();
   output_unpacking_store(Y, out, os, ti);
+  step_end = std::chrono::high_resolution_clock::now();
+  std::cout << "output_unpacking_store: " 
+            << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
+            << " ms" << std::endl;
 
+  // 释放内存
+  step_start = std::chrono::high_resolution_clock::now();
   free(packed_filter);
   free(packed_image);
   free(U);
   free(V);
   free(M);
   free(Y);
+  step_end = std::chrono::high_resolution_clock::now();
+  
+  auto total_end = std::chrono::high_resolution_clock::now();
+  double total_time = std::chrono::duration_cast<std::chrono::microseconds>(total_end - total_start).count() / 1000.0;
+  std::cout << "Memory free: " 
+            << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
+            << " ms" << std::endl;
+  std::cout << "--------------------------------------" << std::endl;
+  std::cout << "Total execution time: " << total_time << " ms" << std::endl;
+  
+  // 销毁CUDA事件
+  cudaEventDestroy(start);
+  cudaEventDestroy(stop);
 }
