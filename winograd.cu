@@ -12,24 +12,27 @@
 #include "utils.h"
 
 void image_transform(float *__restrict__ packed_image,
+                     float *__restrict__ swapped_V,
                      float *__restrict__ V,
                      const V_shape_t vs,
                      const tiling_info_t ti,
                      const int64_t collapsed_dim_size) {
-  typedef float(*packed_image_tensor_t)[ti.tile_in_w][collapsed_dim_size];
+  typedef float(*packed_image_tensor_t)[ti.tile_in_h][ti.tile_in_w];
   typedef float(*V_tensor_t)[ti.tile_in_w][collapsed_dim_size];
+  typedef float(*swapped_V_tensor_t)[ti.tile_in_h][ti.tile_in_w];
   packed_image_tensor_t packed_image_tensor = (packed_image_tensor_t)packed_image;
   V_tensor_t V_tensor = (V_tensor_t)V;
+  swapped_V_tensor_t swapped_V_tensor = (swapped_V_tensor_t)swapped_V;
 
   float z0, z1, z2, z3, z4, z5, z6;
   #pragma omp parallel for collapse(2)
   for (int64_t idx = 0; idx < collapsed_dim_size; idx++) {
     for (int64_t w = 0; w < ti.tile_in_w; ++w) {
-      z6 = packed_image_tensor[0][w][idx];
+      z6 = packed_image_tensor[idx][0][w];
 
       z0 = 4.0f * z6;
 
-      z6 = packed_image_tensor[1][w][idx];
+      z6 = packed_image_tensor[idx][1][w];
 
       z1 = -4.0f * z6;
       z2 = 4.0f * z6;
@@ -37,7 +40,7 @@ void image_transform(float *__restrict__ packed_image,
       z4 = 2.0f * z6;
       z5 = 4.0f * z6;
 
-      z6 = packed_image_tensor[2][w][idx];
+      z6 = packed_image_tensor[idx][2][w];
 
       z0 += -5.0f * z6;
       z1 += -4.0f * z6;
@@ -45,7 +48,7 @@ void image_transform(float *__restrict__ packed_image,
       z3 += -z6;
       z4 += -z6;
 
-      z6 = packed_image_tensor[3][w][idx];
+      z6 = packed_image_tensor[idx][3][w];
 
       z1 += z6;
       z2 += -z6;
@@ -53,7 +56,7 @@ void image_transform(float *__restrict__ packed_image,
       z4 += -2.0f * z6;
       z5 += -5.0f * z6;
 
-      z6 = packed_image_tensor[4][w][idx];
+      z6 = packed_image_tensor[idx][4][w];
 
       z0 += z6;
       z1 += z6;
@@ -61,24 +64,24 @@ void image_transform(float *__restrict__ packed_image,
       z3 += z6;
       z4 += z6;
 
-      z6 = packed_image_tensor[5][w][idx];
+      z6 = packed_image_tensor[idx][5][w];
 
       z5 += z6;
 
-      V_tensor[0][w][idx] = z0;
-      V_tensor[1][w][idx] = z1;
-      V_tensor[2][w][idx] = z2;
-      V_tensor[3][w][idx] = z3;
-      V_tensor[4][w][idx] = z4;
-      V_tensor[5][w][idx] = z5;
+      swapped_V_tensor[idx][0][w] = z0;
+      swapped_V_tensor[idx][1][w] = z1;
+      swapped_V_tensor[idx][2][w] = z2;
+      swapped_V_tensor[idx][3][w] = z3;
+      swapped_V_tensor[idx][4][w] = z4;
+      swapped_V_tensor[idx][5][w] = z5;
     }
 
     for (int64_t h = 0; h < ti.tile_in_h; ++h) {
-      z6 = V_tensor[h][0][idx];
+      z6 = swapped_V_tensor[idx][h][0];
 
       z0 = 4.0f * z6;
 
-      z6 = V_tensor[h][1][idx];
+      z6 = swapped_V_tensor[idx][h][1];
 
       z1 = -4.0f * z6;
       z2 = 4.0f * z6;
@@ -86,7 +89,7 @@ void image_transform(float *__restrict__ packed_image,
       z4 = 2.0f * z6;
       z5 = 4.0f * z6;
 
-      z6 = V_tensor[h][2][idx];
+      z6 = swapped_V_tensor[idx][h][2];
 
       z0 += -5.0f * z6;
       z1 += -4.0f * z6;
@@ -94,7 +97,7 @@ void image_transform(float *__restrict__ packed_image,
       z3 += -z6;
       z4 += -z6;
 
-      z6 = V_tensor[h][3][idx];
+      z6 = swapped_V_tensor[idx][h][3];
 
       z1 += z6;
       z2 += -z6;
@@ -102,7 +105,7 @@ void image_transform(float *__restrict__ packed_image,
       z4 += -2.0f * z6;
       z5 += -5.0f * z6;
 
-      z6 = V_tensor[h][4][idx];
+      z6 = swapped_V_tensor[idx][h][4];
 
       z0 += z6;
       z1 += z6;
@@ -110,7 +113,7 @@ void image_transform(float *__restrict__ packed_image,
       z3 += z6;
       z4 += z6;
 
-      z6 = V_tensor[h][5][idx];
+      z6 = swapped_V_tensor[idx][h][5];
 
       z5 += z6;
 
@@ -309,7 +312,7 @@ void image_packing(float *__restrict__ image,
                    float *__restrict__ packed_image,
                    const image_shape_t is,
                    const tiling_info_t ti) {
-  typedef float(*packedImage_tensor_t)[ti.tile_in_w][ti.num_tiles][is.ic];
+  typedef float(*packedImage_tensor_t)[is.ic][ti.tile_in_h][ti.tile_in_w];
   typedef float(*image_tensor_t)[is.ic][is.h][is.w];
   packedImage_tensor_t packed_image_tensor = (packedImage_tensor_t)packed_image;
   image_tensor_t image_tensor = (image_tensor_t)image;
@@ -320,7 +323,7 @@ void image_packing(float *__restrict__ image,
     for (int64_t ic = 0; ic < is.ic; ic++) {
       for (int64_t h = 0, hed = MIN( ti.tile_in_h, is.h - hh*4); h < hed; ++h) {
         for (int64_t w = 0, wed = MIN(ti.tile_in_w, is.w-ww * 4); w < wed; ++w) {
-            packed_image_tensor[h][w][tile][ic] = image_tensor[batch][ic][(hh * 4 + h)][(ww * 4 + w)];
+            packed_image_tensor[tile][ic][h][w] = image_tensor[batch][ic][(hh * 4 + h)][(ww * 4 + w)];
         }
       }
     }
@@ -429,6 +432,7 @@ void winograd_convolution(
 
   float *packed_filter = (float *)malloc(sizeof(float) * fs.h * fs.w * fs.oc * fs.ic);
   float *packed_image = (float *)malloc(sizeof(float) * ti.tile_in_h * ti.tile_in_w * ti.num_tiles * is.ic);
+  float *swapped_V = (float *)malloc(sizeof(float) * vs.num_tiles * vs.ic * ti.tile_in_h * ti.tile_in_w);
   float *U = (float *)malloc(sizeof(float) * ti.tile_in_h * ti.tile_in_w * us.oc * us.ic);
   float *V = (float *)malloc(sizeof(float) * ti.tile_in_h * ti.tile_in_w * vs.num_tiles * vs.ic);
   float *M = (float *)malloc(sizeof(float) * ti.tile_in_h * ti.tile_in_w * us.oc * vs.num_tiles);
@@ -447,7 +451,7 @@ void winograd_convolution(
     #pragma omp section
     {
       filter_transform(packed_filter, U, fs, us, us.oc * us.ic);
-      image_transform(packed_image, V, vs, ti, vs.ic * vs.num_tiles);      
+      image_transform(packed_image, swapped_V, V, vs, ti, vs.ic * vs.num_tiles);      
     }
   }
 
@@ -489,6 +493,7 @@ void winograd_convolution(
   step_start = std::chrono::high_resolution_clock::now();
   free(packed_filter);
   free(packed_image);
+  free(swapped_V);
   free(U);
   free(V);
   free(M);
