@@ -217,16 +217,13 @@ void filter_transform(float *__restrict__ filter,
 void output_transform(float *__restrict__ swapped_M,
                       float *__restrict__ M,
                       float *__restrict__ swapped_Y,
-                      float *__restrict__ Y,
                       const tiling_info_t ti,
                       const int64_t collapsed_dim_size) {
 
   typedef float(*M_tensor_t)[ti.tile_in_w][collapsed_dim_size];
-  typedef float(*Y_tensor_t)[ti.tile_in_w][collapsed_dim_size];
   typedef float(*swapped_M_tensor_t)[ti.tile_in_h][ti.tile_in_w];
   typedef float(*swapped_Y_tensor_t)[ti.tile_out_h][ti.tile_in_w];
   M_tensor_t M_tensor = (M_tensor_t)M;
-  Y_tensor_t Y_tensor = (Y_tensor_t)Y;
   swapped_M_tensor_t swapped_M_tensor = (swapped_M_tensor_t)swapped_M;
   swapped_Y_tensor_t swapped_Y_tensor = (swapped_Y_tensor_t)swapped_Y;
   
@@ -511,8 +508,6 @@ void winograd_convolution(
   float *U = (float *)malloc(sizeof(float) * ti.tile_in_h * ti.tile_in_w * us.oc * us.ic);
   float *V = (float *)malloc(sizeof(float) * ti.tile_in_h * ti.tile_in_w * vs.num_tiles * vs.ic);
   float *M = (float *)malloc(sizeof(float) * ti.tile_in_h * ti.tile_in_w * us.oc * vs.num_tiles);
-  float *Y = (float *)malloc(sizeof(float) * ti.tile_out_h * ti.tile_in_w * os.oc * ti.num_tiles);
-
   
   // // 1. 单独计时filter_transform
   // step_start = std::chrono::high_resolution_clock::now();
@@ -566,7 +561,7 @@ void winograd_convolution(
 
   // // 5. 拆分output_transform的统计
   // step_start = std::chrono::high_resolution_clock::now();
-  output_transform(swapped_M, M, swapped_Y, Y, ti, us.oc * vs.num_tiles);
+  output_transform(swapped_M, M, swapped_Y, ti, us.oc * vs.num_tiles);
   // step_end = std::chrono::high_resolution_clock::now();
   // std::cout << "output_transform: " 
   //           << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
@@ -591,7 +586,6 @@ void winograd_convolution(
   free(U);
   free(V);
   free(M);
-  free(Y);
   // step_end = std::chrono::high_resolution_clock::now();
   
   // auto total_end = std::chrono::high_resolution_clock::now();
