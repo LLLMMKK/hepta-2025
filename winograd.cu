@@ -226,12 +226,15 @@ void output_transform(float *__restrict__ swapped_M,
   swapped_M_tensor_t swapped_M_tensor = (swapped_M_tensor_t)swapped_M;
   swapped_Y_tensor_t swapped_Y_tensor = (swapped_Y_tensor_t)swapped_Y;
   
-  #pragma omp parallel for collapse(3)
+  #pragma omp parallel for collapse(2)
   for (int64_t idx = 0; idx < collapsed_dim_size; idx++) {
-    for (int64_t w = 0; w < ti.tile_in_w; ++w) {
-        for(int64_t h = 0; h < ti.tile_in_h; ++h) {
-            swapped_M_tensor[idx][h][w] = M_tensor[h][w][idx];
-        }
+    for (int64_t w = 0; w < 6; ++w) {
+      swapped_M_tensor[idx][0][w] = M_tensor[0][w][idx];
+      swapped_M_tensor[idx][1][w] = M_tensor[1][w][idx];
+      swapped_M_tensor[idx][2][w] = M_tensor[2][w][idx];
+      swapped_M_tensor[idx][3][w] = M_tensor[3][w][idx];
+      swapped_M_tensor[idx][4][w] = M_tensor[4][w][idx];
+      swapped_M_tensor[idx][5][w] = M_tensor[5][w][idx];
     }
   }
 
@@ -308,25 +311,12 @@ void output_transform(float *__restrict__ swapped_M,
 
       z3 += z4;
 
-      Y_tensor[h][0][idx] = z0;
-      Y_tensor[h][1][idx] = z1;
-      Y_tensor[h][2][idx] = z2;
-      Y_tensor[h][3][idx] = z3;
+      swapped_Y_tensor[idx][h][0] = z0;
+      swapped_Y_tensor[idx][h][1] = z1;
+      swapped_Y_tensor[idx][h][2] = z2;
+      swapped_Y_tensor[idx][h][3] = z3;
     }
   }
-}
-
-void filter_packing(float *__restrict__ filter, float *__restrict__ packed_filter, const filter_shape_t fs) {
-  typedef float(*filter_tensor_t)[fs.ic][fs.h][fs.w];
-  typedef float(*packed_filter_tensor_t)[fs.w][fs.oc][fs.ic];
-  filter_tensor_t filter_tensor = (filter_tensor_t)filter;
-  packed_filter_tensor_t packed_filter_tensor = (packed_filter_tensor_t)packed_filter;
-  #pragma omp parallel for collapse(4)
-  for (int64_t h = 0; h < fs.h; ++h)
-    for (int64_t w = 0; w < fs.w; ++w)
-      for (int64_t oc = 0; oc < fs.oc; oc++)
-        for (int64_t ic = 0; ic < fs.ic; ic++)
-          packed_filter_tensor[h][w][oc][ic] = filter_tensor[oc][ic][h][w];
 }
 
 void image_packing(float *__restrict__ image,
@@ -353,24 +343,24 @@ void image_packing(float *__restrict__ image,
   }
 }
 
-void output_unpacking_store(float *__restrict__ Y,
+void output_unpacking_store(float *__restrict__ swapped_Y,
                             float *__restrict__ out,
                             const out_shape_t os,
                             const tiling_info_t ti) {
-  typedef float(*Y_tensor_t)[ti.tile_in_w][os.oc][ti.num_tiles];
+  typedef float(*swapped_Y_tensor_t)[ti.num_tiles][ti.tile_out_h][ti.tile_in_w];
   typedef float(*out_tensor_t)[os.oc][os.h][os.w];
-  Y_tensor_t Y_tensor = (Y_tensor_t)Y;
+  swapped_Y_tensor_t swapped_Y_tensor = (swapped_Y_tensor_t)swapped_Y;
   out_tensor_t out_tensor = (out_tensor_t)out;
-  #pragma omp parallel for collapse(1)
+  #pragma omp parallel for
   for (int64_t tile = 0; tile < ti.num_tiles; tile++) {
     tile_index_t tidx = get_tile_index(tile, ti);
-    int64_t batch = tidx.b, ww = tidx.tw, hh = tidx.th;
-    int64_t hh4 = hh << 2, ww4 = ww << 2;
+    int64_t batch = tidx.b, ww = tidx.tw<<2, hh = tidx.th<<2;
+    int64_t hed = MIN(ti.tile_out_h, os.h - hh), wed = MIN(ti.tile_in_w, os.w - ww);
     #pragma omp parallel for collapse(3)
     for (int64_t oc = 0; oc < os.oc; oc++) {
-      for (int64_t h = 0, hed = MIN(ti.tile_out_h, os.h - hh * 4), hd = hh4; h < hed; ++h,++hd) {
-        for (int64_t w = 0, wed = MIN(ti.tile_out_w, os.w - ww * 4), wd = ww4; w < wed; ++w,++wd) {
-            out_tensor[batch][oc][hd][wd] = Y_tensor[h][w][oc][tile];
+      for (int64_t h = 0, hd = hh; h < hed; ++h,++hd) {
+        for (int64_t w = 0, wd = ww; w < wed; ++w,++wd) {
+            out_tensor[batch][oc][hd][wd] = swapped_Y_tensor[oc][tile][h][w];
         }
       }
     }
@@ -562,7 +552,7 @@ void winograd_convolution(
   
   // 计时output_unpacking_store
   step_start = std::chrono::high_resolution_clock::now();
-  output_unpacking_store(Y, out, os, ti);
+  output_unpacking_store(swapped_Y, out, os, ti);
   step_end = std::chrono::high_resolution_clock::now();
   std::cout << "output_unpacking_store: " 
             << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
