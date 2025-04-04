@@ -341,11 +341,12 @@ void image_packing(float *__restrict__ image,
   for (int64_t tile = 0; tile < ti.num_tiles; tile++) {
     tile_index_t tidx = get_tile_index(tile, ti);
     int64_t batch = tidx.b, ww = tidx.tw, hh = tidx.th;
+    int64_t hh4 = hh <<2 , ww4 = ww << 2;
     #pragma omp parallel for collapse(3)
     for (int64_t ic = 0; ic < is.ic; ic++) {
-      for (int64_t h = 0, hed = MIN( ti.tile_in_h, is.h - hh*4); h < hed; ++h) {
-        for (int64_t w = 0, wed = MIN(ti.tile_in_w, is.w-ww * 4); w < wed; ++w) {
-            packed_image_tensor[tile][ic][h][w] = image_tensor[batch][ic][(hh * 4 + h)][(ww * 4 + w)];
+      for (int64_t h = 0, hed = MIN( ti.tile_in_h, is.h - hh*4), hd = hh4; h < hed; ++h, ++hd) {
+        for (int64_t w = 0, wed = MIN(ti.tile_in_w, is.w-ww * 4), wd = ww4; w < wed; ++w, ++wd) {
+            packed_image_tensor[tile][ic][h][w] = image_tensor[batch][ic][hd][wd];
         }
       }
     }
@@ -364,11 +365,12 @@ void output_unpacking_store(float *__restrict__ Y,
   for (int64_t tile = 0; tile < ti.num_tiles; tile++) {
     tile_index_t tidx = get_tile_index(tile, ti);
     int64_t batch = tidx.b, ww = tidx.tw, hh = tidx.th;
+    int64_t hh4 = hh << 2, ww4 = ww << 2;
     #pragma omp parallel for collapse(3)
     for (int64_t oc = 0; oc < os.oc; oc++) {
-      for (int64_t h = 0, hed = MIN(ti.tile_out_h, os.h - hh * 4); h < hed; ++h) {
-        for (int64_t w = 0, wed = MIN(ti.tile_out_w, os.w - ww * 4); w < wed; ++w) {
-            out_tensor[batch][oc][(hh * 4 + h)][(ww * 4 + w)] = Y_tensor[h][w][oc][tile];
+      for (int64_t h = 0, hed = MIN(ti.tile_out_h, os.h - hh * 4), hd = hh4; h < hed; ++h,++hd) {
+        for (int64_t w = 0, wed = MIN(ti.tile_out_w, os.w - ww * 4), wd = ww4; w < wed; ++w,++wd) {
+            out_tensor[batch][oc][hd][wd] = Y_tensor[h][w][oc][tile];
         }
       }
     }
