@@ -25,8 +25,9 @@ void image_transform(float *__restrict__ packed_image,
   swapped_V_tensor_t swapped_V_tensor = (swapped_V_tensor_t)swapped_V;
 
   float z0, z1, z2, z3, z4, z5, z6;
-  #pragma omp parallel for collapse(2)
+  #pragma omp parallel for
   for (int64_t idx = 0; idx < collapsed_dim_size; idx++) {
+    #pragma omp parallel for
     for (int64_t w = 0; w < ti.tile_in_w; ++w) {
       z6 = packed_image_tensor[idx][0][w];
 
@@ -75,7 +76,7 @@ void image_transform(float *__restrict__ packed_image,
       swapped_V_tensor[idx][4][w] = z4;
       swapped_V_tensor[idx][5][w] = z5;
     }
-
+    #pragma omp parallel for
     for (int64_t h = 0; h < ti.tile_in_h; ++h) {
       z6 = swapped_V_tensor[idx][h][0];
 
@@ -239,8 +240,9 @@ void output_transform(float *__restrict__ swapped_M,
   }
 
   float z0, z1, z2, z3, z4;
-  #pragma omp parallel for collapse(2)
+  #pragma omp parallel for
   for (int64_t idx = 0; idx < collapsed_dim_size; idx++) {
+    #pragma omp parallel for
     for (int64_t w = 0; w < ti.tile_in_w; ++w) {
       z4 = swapped_M_tensor[idx][0][w];
       z0 = z4;
@@ -277,7 +279,7 @@ void output_transform(float *__restrict__ swapped_M,
       swapped_Y_tensor[idx][2][w] = z2;
       swapped_Y_tensor[idx][3][w] = z3;
     }
-
+    #pragma omp parallel for
     for (int64_t h = 0; h < ti.tile_out_h; ++h) {
       z4 = swapped_Y_tensor[idx][h][0];
 
@@ -469,11 +471,11 @@ void sgemm(const int64_t M, const int64_t N, const int64_t K, float *A, float *B
 }
 
 void winograd_convolution(
-    float *__restrict__ image, /**< float [batch_num][input_channel_num][image_height][image_width] */
+    float *__restrict__ image,
     const int image_height,
     const int image_width,
     const int input_channel_num,
-    float *__restrict__ filter, /**< float [output_channel_num][input_channel_num][FLT_H][FLT_W] */
+    float *__restrict__ filter,
     const int output_channel_num,
     const int batch_num,
     float *__restrict__ out) {
@@ -509,27 +511,31 @@ void winograd_convolution(
   float *Y = (float *)malloc(sizeof(float) * ti.tile_out_h * ti.tile_in_w * os.oc * ti.num_tiles);
 
   
-  // 计时filter_packing
+  // 1. 单独计时filter_transform
   step_start = std::chrono::high_resolution_clock::now();
-  #pragma omp parallel sections
-  {
-    #pragma omp section
-    {
-      filter_transform(filter, swapped_U, U, fs, us, us.oc * us.ic);
-    }
-    #pragma omp section
-    {
-      image_packing(image, packed_image, is, ti);
-      image_transform(packed_image, swapped_V, V, vs, ti, vs.ic * vs.num_tiles);      
-    }
-  }
-
+  filter_transform(filter, swapped_U, U, fs, us, us.oc * us.ic);
   step_end = std::chrono::high_resolution_clock::now();
-  std::cout << "filter_image_packing_transform: " 
+  std::cout << "filter_transform: " 
             << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
             << " ms" << std::endl;
   
-  // 计时sgemm(含GPU操作)
+  // 2. 单独计时image_packing
+  step_start = std::chrono::high_resolution_clock::now();
+  image_packing(image, packed_image, is, ti);
+  step_end = std::chrono::high_resolution_clock::now();
+  std::cout << "image_packing: " 
+            << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
+            << " ms" << std::endl;
+  
+  // 3. 单独计时image_transform
+  step_start = std::chrono::high_resolution_clock::now();
+  image_transform(packed_image, swapped_V, V, vs, ti, vs.ic * vs.num_tiles);
+  step_end = std::chrono::high_resolution_clock::now();
+  std::cout << "image_transform: " 
+            << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
+            << " ms" << std::endl;
+  
+  // 4. 计时sgemm(含GPU操作) - 保持不变
   step_start = std::chrono::high_resolution_clock::now();
   cudaEventRecord(start);
   sgemm(vs.num_tiles, us.oc, us.ic, (float *)(V), (float *)(U), (float *)(M), ti.tile_in_h*ti.tile_in_w);
@@ -542,7 +548,7 @@ void winograd_convolution(
             << std::chrono::duration_cast<std::chrono::microseconds>(step_end - step_start).count() / 1000.0 
             << " ms (GPU kernel: " << milliseconds << " ms)" << std::endl;
 
-  // 计时output_transform
+  // 5. 拆分output_transform的统计
   step_start = std::chrono::high_resolution_clock::now();
   output_transform(swapped_M, M, swapped_Y, Y, ti, us.oc * vs.num_tiles);
   step_end = std::chrono::high_resolution_clock::now();
