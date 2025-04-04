@@ -360,7 +360,7 @@ void output_unpacking_store(float *__restrict__ swapped_Y,
   for (int64_t tile = 0; tile < ti.num_tiles; tile++) {
     tile_index_t tidx = get_tile_index(tile, ti);
     int64_t batch = tidx.b, ww = tidx.tw<<2, hh = tidx.th<<2;
-    int64_t hed = MIN(ti.tile_out_h, os.h - hh), wed = MIN(ti.tile_in_w, os.w - ww);
+    int64_t hed = MIN(ti.tile_out_h, os.h - hh), wed = MIN(ti.tile_out_w, os.w - ww);
     // #pragma omp parallel for collapse(3)
     for (int64_t oc = 0; oc < os.oc; oc++) {
       for (int64_t h = 0; h < hed; ++h) {
