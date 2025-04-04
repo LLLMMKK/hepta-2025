@@ -217,8 +217,6 @@ void output_transform(float *__restrict__ swapped_M,
                       const tiling_info_t ti,
                       const int64_t collapsed_dim_size) {
 
-// float *swapped_M = (float *)malloc(sizeof(float) * us.oc * vs.num_tiles * ti.tile_in_h * ti.tile_in_w);
-// float *swapped_Y = (float *)malloc(sizeof(float) * os.oc * ti.num_tiles * ti.tile_out_h * ti.tile_in_w);
   typedef float(*M_tensor_t)[ti.tile_in_w][collapsed_dim_size];
   typedef float(*Y_tensor_t)[ti.tile_in_w][collapsed_dim_size];
   typedef float(*swapped_M_tensor_t)[ti.tile_in_h][ti.tile_in_w];
@@ -339,10 +337,11 @@ void image_packing(float *__restrict__ image,
   typedef float(*image_tensor_t)[is.ic][is.h][is.w];
   packedImage_tensor_t packed_image_tensor = (packedImage_tensor_t)packed_image;
   image_tensor_t image_tensor = (image_tensor_t)image;
-  #pragma omp parallel for collapse(4)
+  #pragma omp parallel for collapse(1)
   for (int64_t tile = 0; tile < ti.num_tiles; tile++) {
     tile_index_t tidx = get_tile_index(tile, ti);
     int64_t batch = tidx.b, ww = tidx.tw, hh = tidx.th;
+    #pragma omp parallel for collapse(3)
     for (int64_t ic = 0; ic < is.ic; ic++) {
       for (int64_t h = 0, hed = MIN( ti.tile_in_h, is.h - hh*4); h < hed; ++h) {
         for (int64_t w = 0, wed = MIN(ti.tile_in_w, is.w-ww * 4); w < wed; ++w) {
@@ -361,10 +360,11 @@ void output_unpacking_store(float *__restrict__ Y,
   typedef float(*out_tensor_t)[os.oc][os.h][os.w];
   Y_tensor_t Y_tensor = (Y_tensor_t)Y;
   out_tensor_t out_tensor = (out_tensor_t)out;
-  #pragma omp parallel for collapse(4)
+  #pragma omp parallel for collapse(1)
   for (int64_t tile = 0; tile < ti.num_tiles; tile++) {
     tile_index_t tidx = get_tile_index(tile, ti);
     int64_t batch = tidx.b, ww = tidx.tw, hh = tidx.th;
+    #pragma omp parallel for collapse(3)
     for (int64_t oc = 0; oc < os.oc; oc++) {
       for (int64_t h = 0, hed = MIN(ti.tile_out_h, os.h - hh * 4); h < hed; ++h) {
         for (int64_t w = 0, wed = MIN(ti.tile_out_w, os.w - ww * 4); w < wed; ++w) {
