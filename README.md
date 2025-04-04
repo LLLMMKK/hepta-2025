@@ -1,3 +1,47 @@
+使用了 spack 中的 cuda@12.8，使用 nvcc 编译器。
+
+加载依赖
+
+```
+source env.sh
+```
+
+构建项目
+
+```
+make
+```
+
+通过以下命令将任务提交给slurm系统上的计算节点执行
+
+```
+sbatch run.sh
+```
+
+
+
+使用 cublasSgemm 优化 sgemm()，GFlops 从 5.30 提升到 34.77。
+
+使用 cublasSgemmBatched 优化 sgemm()，使用 O3，提升至 39.89。
+
+重排 packing 中 for 顺序，提升至 41.54。
+
+调整 image_transform() 中维度，提升至 70.75。
+
+调整 output_transform() 中维度，提升至 121.28。
+
+正确性有误，回退重写，并调整 filter_transform 中维度，本地 110.48，发现集群上只有 56.89。
+
+调整 output_unpacking 中维度，集群 72.98。
+
+使用 openMP 后，提升至 257.71。
+
+使用 fp16 量化后，250.22 且正确性有误，回退。
+
+尝试写内存池，未果。
+
+---
+
 # 七边形 2025 年春季招新题目！
 
 嗨，欢迎来做七边形的招新题！
